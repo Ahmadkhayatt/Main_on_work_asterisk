@@ -25,7 +25,7 @@ def run_stt_listener(stt_client, result_queue, stop_event):
     print("  [STT Thread] Stopped.")
 
 
-def interact_with_user(channel_id, snoop_channel_id, recording_file, caller_id):
+def interact_with_user(channel_id, snoop_channel_id, recording_file, caller_id , stt_result_queue):
     """Handles the main conversation flow with STT-based interruption."""
     # 👇 --- ADDED CHECK ---
     if not model or not prompt:
@@ -40,7 +40,6 @@ def interact_with_user(channel_id, snoop_channel_id, recording_file, caller_id):
     print(f"🚀 Interaction starting for channel {channel_id} from {caller_id}.")
     
     stt_queue = queue.Queue()
-    stt_result_queue = queue.Queue()
     stt_stop_event = threading.Event()
 
     audio_streamer = AsteriskLiveAudioStreamer(recording_file, [stt_queue])
@@ -62,7 +61,18 @@ def interact_with_user(channel_id, snoop_channel_id, recording_file, caller_id):
             try:
                 user_text = stt_result_queue.get(timeout=3600)
                 print(f"📝 User said: {user_text}")
-                conversation_history.append(f"User: {user_text}") # <--- Save user's text
+                                # --- NEW: Check for the hangup signal ---
+                if user_text == "HANGUP_EVENT":
+                    print("🛑 Hangup signal received. Ending interaction loop.")
+                    break
+
+                print(f"📝 User said: {user_text}")
+                conversation_history.append(f"User: {user_text}")
+            except queue.Empty:
+                print(" timed out waiting for user input. Exiting.")
+                break
+
+                # conversation_history.append(f"User: {user_text}") # <--- Save user's text
             except queue.Empty:
                 print(" timed out waiting for user input. Exiting.")
                 break
@@ -77,6 +87,7 @@ def interact_with_user(channel_id, snoop_channel_id, recording_file, caller_id):
             print(f"🤖 Gemini: {reply}")
             conversation_history.append(f"AI: {reply}") # <--- Save AI's reply
             print("reply added to database OwO")
+
 
             media_id = speak_and_prepare_for_asterisk(reply)
             if not media_id:

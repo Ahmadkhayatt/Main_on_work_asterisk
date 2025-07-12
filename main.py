@@ -5,9 +5,11 @@ import requests
 import threading
 import os
 from requests.auth import HTTPBasicAuth
-
+import queue
 import config
 from conversation import interact_with_user
+
+active_calls = {}
 
 def originate_call():
     """Initiates an outbound call to the endpoint specified in config."""
@@ -39,7 +41,9 @@ def on_message(ws, message):
         caller_id = event['channel']['caller']['number']
         
         print(f"Channel {channel_id} from {caller_id} entered Stasis.")        
-        
+        stt_result_queue = queue.Queue()
+        active_calls[channel_id] = stt_result_queue
+
         requests.post(
             f"{config.BASE_URL}/channels/{channel_id}/answer",
             auth=HTTPBasicAuth(config.ARI_USER, config.ARI_PASSWORD)
@@ -70,12 +74,18 @@ def on_message(ws, message):
         slin_path = os.path.join(config.LIVE_RECORDING_PATH, f"{recording_name}.sln16")
         threading.Thread(
             target=interact_with_user,
-            args=(channel_id, snoop_channel_id, slin_path, caller_id),
+            args=(channel_id, snoop_channel_id, slin_path, caller_id,stt_result_queue),
             daemon=True
         ).start()
 
     elif event_type == 'StasisEnd':
-        print("📞 Call ended and channel destroyed.")
+        channel_id = event['channel']['id']
+        print(f"📞 Call {channel_id} hung up by user.")
+        
+        # Find the queue for the ended call and send the signal
+        queue_to_signal = active_calls.pop(channel_id, None)
+        if queue_to_signal:
+            queue_to_signal.put("HANGUP_EVENT") # This is our "poison pill"
 
 def on_open(ws):
     print("✅ WebSocket connected to ARI")
