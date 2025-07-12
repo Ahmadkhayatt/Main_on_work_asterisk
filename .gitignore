@@ -5,3 +5,4 @@ __pycache__/
 .env
 google-tts-key.json
 *.sln16
+pjsua2.py
