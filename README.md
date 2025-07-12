@@ -45,27 +45,4 @@ Use it to create:
 | 🔊 Google TTS       | Text-to-speech voice |
 | 🧏 Whisper / Google STT | Speech-to-text recognition |
 
----
-
-## ⚙️ Setup & Installation
-
-> Tested on **Ubuntu 22.04** & **Python 3.10+**
-
-```bash
-# Step 1: Clone the repository
-git clone https://github.com/yourusername/arcane-dialer.git
-cd arcane-dialer
-
-# Step 2: Set up virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Step 3: Install dependencies
-pip install -r requirements.txt
-
-# Step 4: Configure your environment
-cp .env.example .env
-nano .env  # Fill in API keys and Asterisk configs
-
-# Step 5: Start your bot
-python summon_bot.py
+STILL WORKING ON >>> .... :)
