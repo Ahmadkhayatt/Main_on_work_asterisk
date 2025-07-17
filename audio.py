@@ -54,7 +54,7 @@ class GoogleStreamer:
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=config.SAMPLE_RATE, # Now correctly refers to the imported module
             language_code=language_code,
-            enable_automatic_punctuation=True,
+            enable_automatic_punctuation=False,
         )
         self.streaming_config = speech.StreamingRecognitionConfig(
             config=recognition_config, # Use the new variable name here too
