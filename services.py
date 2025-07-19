@@ -25,7 +25,7 @@ def initialize_ai_model():
             },
         )
         # Load your prompt file
-        with open('PromptNew2.txt', "r", encoding="utf-8") as file:
+        with open('Prompt.txt', "r", encoding="utf-8") as file:
             prompt_text = file.read()
             
         print("✅ Gemini Model and prompt loaded successfully.")

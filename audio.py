@@ -55,6 +55,7 @@ class GoogleStreamer:
             sample_rate_hertz=config.SAMPLE_RATE, # Now correctly refers to the imported module
             language_code=language_code,
             enable_automatic_punctuation=False,
+            model="latest_long"
         )
         self.streaming_config = speech.StreamingRecognitionConfig(
             config=recognition_config, # Use the new variable name here too
