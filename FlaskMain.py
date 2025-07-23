@@ -22,6 +22,7 @@ import pwd
 import grp
 import wave
 from functools import wraps
+from datetime import datetime, timezone
 
 # --- Third-Party Imports ---
 import requests
@@ -395,14 +396,16 @@ def ari_event_handler():
     def on_message(ws, message):
         event = json.loads(message)
         event_type = event.get('type')
-        broadcast_log("EVENT", f"ARI Event: {event_type}")
+        # Only log the important events to prevent noise
+        if event_type in ['StasisStart', 'StasisEnd']:
+            broadcast_log("EVENT", f"ARI Event: {event_type} for channel {event.get('channel', {}).get('id')}")
 
         if event_type == 'StasisStart':
+            # ... (StasisStart logic remains the same) ...
             channel = event['channel']
             channel_id = channel['id']
             caller_id = channel['caller']['number']
             
-            # --- Guardrail to ignore snoop channels ---
             if 'snoop' in channel.get('name', '').lower():
                 broadcast_log("DEBUG", f"Ignoring StasisStart for snoop channel {channel_id}")
                 return
@@ -415,9 +418,6 @@ def ari_event_handler():
 
             send_ari_request("post", f"{Config.BASE_URL}/channels/{channel_id}/answer")
             
-            # --- CORRECTED SNOOP REQUEST ---
-            # The 'app' parameter is required by the ARI snoop command.
-            # The guardrail above prevents the recursive loop.
             snoop_params = {"app": Config.ARI_APP, "spy": "in"}
             snoop_response = send_ari_request("post", f"{Config.BASE_URL}/channels/{channel_id}/snoop", params=snoop_params)
             
@@ -435,9 +435,13 @@ def ari_event_handler():
             slin_path = os.path.join(Config.LIVE_RECORDING_PATH, f"{recording_name}.sln16")
             threading.Thread(target=interact_with_user, args=(channel_id, snoop_channel_id, slin_path, caller_id), daemon=True).start()
 
+
         elif event_type == 'StasisEnd':
             channel_id = event['channel']['id']
             broadcast_log("INFO", f"Call {channel_id} hung up.")
+            
+            # MODIFICATION: Emit CALL_END with the ID of the channel that ended.
+            # This is the crucial change that tells the frontend WHICH call has ended.
             socketio.emit('CALL_END', {'callId': channel_id})
             
             with active_calls_lock:
@@ -483,7 +487,6 @@ def make_call():
 
     broadcast_log("INFO", f"Received API request to call {phone_number}")
     
-    # Assuming endpoint is PJSIP/{number}
     endpoint = f"PJSIP/{phone_number}"
     
     call_data = {
@@ -496,10 +499,57 @@ def make_call():
     }
     response = send_ari_request("post", f'{Config.BASE_URL}/channels', data=call_data)
     
+    # MODIFICATION: Return the actual channelId from ARI to the frontend.
     if response:
-        return jsonify({'message': f'Call initiated to {phone_number}'}), 200
+        channel_info = response.json()
+        return jsonify({
+            'message': f'Call initiated to {phone_number}',
+            'channelId': channel_info.get('id')
+        }), 200
     else:
         return jsonify({'error': 'Failed to initiate call via ARI'}), 500
+
+# --- API Endpoint for Dashboard Statistics ---
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    """Calculates and returns key statistics from the database."""
+    if not supabase_client:
+        return jsonify({"error": "Database client not initialized"}), 500
+
+    try:
+        # 1. Get total calls today
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        today_response = supabase_client.from_('call_logs').select('*', count='exact').gte('created_at', today_start).execute()
+        total_calls_today = today_response.count
+
+        # 2. Get total calls this month
+        month_start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+        month_response = supabase_client.from_('call_logs').select('*', count='exact').gte('created_at', month_start).execute()
+        total_calls_month = month_response.count
+
+        # 3. Calculate average duration
+        all_calls_response = supabase_client.from_('call_logs').select('call_duration_seconds').execute()
+        durations = [c['call_duration_seconds'] for c in all_calls_response.data if c['call_duration_seconds'] is not None]
+        
+        if durations:
+            avg_seconds = sum(durations) / len(durations)
+            avg_minutes = int(avg_seconds // 60)
+            avg_remainder_seconds = int(avg_seconds % 60)
+            average_duration = f"{avg_minutes}:{avg_remainder_seconds:02d}"
+        else:
+            average_duration = "0:00"
+
+        stats = {
+            "totalCallsToday": total_calls_today,
+            "totalCallsMonth": total_calls_month,
+            "averageDuration": average_duration
+        }
+        return jsonify(stats), 200
+
+    except Exception as e:
+        broadcast_log("ERROR", f"Failed to fetch stats from database: {e}")
+        return jsonify({"error": "Failed to fetch stats"}), 500
+
 
 @socketio.on('connect')
 def handle_connect():
