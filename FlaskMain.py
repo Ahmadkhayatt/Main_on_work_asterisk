@@ -390,23 +390,39 @@ def interact_with_user(channel_id, snoop_channel_id, recording_file, caller_id):
 # ==============================================================================
 
 def ari_event_handler():
-    """Handles incoming events from the Asterisk ARI WebSocket."""
     ws_url = Config.WEBSOCKET_URL
-    
+
     def on_message(ws, message):
         event = json.loads(message)
         event_type = event.get('type')
-        # Only log the important events to prevent noise
-        if event_type in ['StasisStart', 'StasisEnd']:
-            broadcast_log("EVENT", f"ARI Event: {event_type} for channel {event.get('channel', {}).get('id')}")
 
         if event_type == 'StasisStart':
-            # ... (StasisStart logic remains the same) ...
             channel = event['channel']
             channel_id = channel['id']
-            caller_id = channel['caller']['number']
-            
-            if 'snoop' in channel.get('name', '').lower():
+
+            # 1) try ARI field
+            caller_num = (channel.get('caller') or {}).get('number') or ""
+
+            # 2) try appArgs (we passed dialed number here on create)
+            if not caller_num:
+                args = event.get('args') or []
+                caller_num = (args[0] if args else "") or ""
+
+            # 3) try Asterisk variable CALLERID(num)
+            if not caller_num:
+                var_resp = send_ari_request(
+                    "get",
+                    f"{Config.BASE_URL}/channels/{channel_id}/variable",
+                    params={"variable": "CALLERID(num)"}
+                )
+                try:
+                    caller_num = (var_resp.json().get('value') if var_resp else "") or ""
+                except Exception:
+                    caller_num = ""
+
+            caller_id = caller_num or "Unknown"
+
+            if 'snoop' in (channel.get('name') or '').lower():
                 broadcast_log("DEBUG", f"Ignoring StasisStart for snoop channel {channel_id}")
                 return
 
@@ -417,10 +433,9 @@ def ari_event_handler():
                 active_calls[channel_id] = queue.Queue()
 
             send_ari_request("post", f"{Config.BASE_URL}/channels/{channel_id}/answer")
-            
+
             snoop_params = {"app": Config.ARI_APP, "spy": "in"}
             snoop_response = send_ari_request("post", f"{Config.BASE_URL}/channels/{channel_id}/snoop", params=snoop_params)
-            
             if not snoop_response:
                 send_ari_request("delete", f"{Config.BASE_URL}/channels/{channel_id}")
                 return
@@ -429,25 +444,16 @@ def ari_event_handler():
             broadcast_log("INFO", f"Snoop channel {snoop_channel_id} created.")
 
             recording_name = f"live_rec_{channel_id}"
-            send_ari_request("post", f"{Config.BASE_URL}/channels/{snoop_channel_id}/record", params={"name": recording_name, "format": "sln16", "ifExists": "overwrite"})
+            send_ari_request("post", f"{Config.BASE_URL}/channels/{snoop_channel_id}/record",
+                             params={"name": recording_name, "format": "sln16", "ifExists": "overwrite"})
             broadcast_log("INFO", f"Recording started on snoop channel {snoop_channel_id}.")
 
             slin_path = os.path.join(Config.LIVE_RECORDING_PATH, f"{recording_name}.sln16")
-            threading.Thread(target=interact_with_user, args=(channel_id, snoop_channel_id, slin_path, caller_id), daemon=True).start()
-
-
-        elif event_type == 'StasisEnd':
-            channel_id = event['channel']['id']
-            broadcast_log("INFO", f"Call {channel_id} hung up.")
-            
-            # MODIFICATION: Emit CALL_END with the ID of the channel that ended.
-            # This is the crucial change that tells the frontend WHICH call has ended.
-            socketio.emit('CALL_END', {'callId': channel_id})
-            
-            with active_calls_lock:
-                queue_to_signal = active_calls.pop(channel_id, None)
-            if queue_to_signal:
-                queue_to_signal.put("HANGUP_EVENT")
+            threading.Thread(
+                target=interact_with_user,
+                args=(channel_id, snoop_channel_id, slin_path, caller_id),  # <-- passes resolved caller_id
+                daemon=True
+            ).start()
 
     def on_error(ws, error):
         broadcast_log("ERROR", f"ARI WebSocket Error: {error}")
@@ -508,6 +514,30 @@ def make_call():
         }), 200
     else:
         return jsonify({'error': 'Failed to initiate call via ARI'}), 500
+
+# NEW: API endpoint to serve data for the Reports page.
+@app.route('/api/reports', methods=['GET'])
+def get_reports():
+    """Fetches call logs and survey responses from the database."""
+    if not supabase_client:
+        return jsonify({"error": "Database client not initialized"}), 500
+    try:
+        # Fetch call logs
+        logs_response = supabase_client.from_('call_logs').select('*').order('created_at', desc=True).limit(100).execute()
+        
+        # Fetch survey responses (assuming table name is 'survey_responses')
+        # This might need adjustment based on your actual table name.
+        surveys_response = supabase_client.from_('survey_results').select('*').order('created_at', desc=True).limit(100).execute()
+
+        report_data = {
+            "callHistory": logs_response.data,
+            "surveyResponses": surveys_response.data
+        }
+        return jsonify(report_data), 200
+    except Exception as e:
+        broadcast_log("ERROR", f"Failed to fetch reports from database: {e}")
+        return jsonify({"error": "Failed to fetch reports"}), 500
+
 
 # --- API Endpoint for Dashboard Statistics ---
 @app.route('/api/stats', methods=['GET'])
